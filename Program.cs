@@ -33,10 +33,26 @@ namespace dorareko
             string workdir = "";
             string savedir = "";
             double spaceTolerance = 0;
-            string keyword = "";
+            string trigger = "";
+            string quitapp = "";
 
             bool isRunning = false;
-            bool isTargetWindowExist = false;
+            bool isTriggered = false;
+            bool isQuitRequested = false;
+
+            // 多重起動禁止
+            if (System.Diagnostics.Process.GetProcessesByName(System.Diagnostics.Process.GetCurrentProcess().ProcessName).Length > 1)
+            {
+                MessageBox.Show("多重起動はできません。");
+                Environment.Exit(-1);
+            }
+
+            // ログオフ・シャットダウンを検知したら終了
+            var evw = new EventWatcher((o, e) =>
+            {
+                timer.Dispose();
+                Environment.Exit(-1);
+            });
 
             // 設定ファイル読み込み
             try
@@ -56,7 +72,9 @@ namespace dorareko
                 savedir = dic["storage"]["savedir"];
                 spaceTolerance = Convert.ToDouble(dic["storage"]["tolerance"]);
 
-                keyword = dic["trigger"]["keyword"];
+                trigger = dic["trigger"]["keyword"];
+
+                quitapp = dic["quitapp"]["keyword"];
             }
 
             catch
@@ -68,7 +86,6 @@ namespace dorareko
             // RAMDISKのマウント待ち
             DateTime waitStart = DateTime.Now;
             TimeSpan waitLength = new TimeSpan(0, 0, 10);   // 10s
-
             while (true)
             {
                 System.Threading.Thread.Sleep(100);
@@ -124,20 +141,6 @@ namespace dorareko
                     Environment.Exit(-1);
                 }
             }
-
-            //// トリガをクリア
-            //if (System.IO.File.Exists(trigpath))
-            //{
-            //    try
-            //    {
-            //        System.IO.File.Delete(trigpath);
-            //    }
-            //    catch
-            //    {
-            //        MessageBox.Show("トリガファイルの削除に失敗しました", "ドラレコ", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            //        Environment.Exit(-1);
-            //    }
-            //}
 
             // カメラ動作チェック
             var capture = new VideoCapture(id);
@@ -259,20 +262,18 @@ namespace dorareko
                 }
             };
 
-            // テスト実行（10秒）
+            // テスト録画
             DateTime testStart = DateTime.Now;
             TimeSpan testLength = new TimeSpan(0, 0, 10);   // 10s
-
-            // タイマー開始
             timer = new System.Threading.Timer(callback, null, 0, period);
-
+                       
             while (true)
             {
                 System.Threading.Thread.Sleep(100);
 
                 if (DateTime.Now - testStart > testLength)
                 {
-                    // 実行中のスレッドがすべて終了するのを待つために、確実なDisposeを行う
+                    // このときは実行中のスレッドがすべて終了するのを待つために、確実なDisposeを行う
                     // https://so-zou.jp/software/tech/programming/c-sharp/thread/
                     // timer.Dispose();の代わりに以下のようにする
                     using (System.Threading.WaitHandle waitHandle = new System.Threading.ManualResetEvent(false))
@@ -356,21 +357,14 @@ namespace dorareko
                     }
                     break;
                 }
-
-                // ログオフ・シャットダウンなどのとき
-                var evw = new EventWatcher((o, e) =>
-                {
-                    timer.Dispose();
-                    Environment.Exit(-1);
-                });
             }
 
 
-            // フラグの初期化
-            isRunning = false;
-            isTargetWindowExist = false;
-
             // メインループ
+            isRunning = false;
+            isTriggered = false;
+            isQuitRequested = false;
+
             while (true)
             {
                 System.Threading.Thread.Sleep(100);
@@ -380,26 +374,38 @@ namespace dorareko
                 EnumWindows(new EnumWindowsDelegate(EnumWindowCallBack), IntPtr.Zero);
 
                 // キーワードを含むタイトルがあるか調べる
-                isTargetWindowExist = false;
+                isTriggered = false;
                 foreach (string w in GlobalVariables.WindowList)
                 {
-                    if (w.Contains(keyword))
+                    if (w.Contains(trigger))
                     {
-                        isTargetWindowExist = true;
+                        isTriggered = true;
+                    }
+                    if (w.Contains(quitapp))
+                    {
+                        isQuitRequested = true;
                     }
                 }
 
+                // 終了リクエストされたとき
+                if (isQuitRequested == true)
+                {
+                    MessageBox.Show("終了します", "ドラレコ", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    timer.Dispose();
+                    Environment.Exit(-1);
+                }
+
                 // タイマー動作停止中/未開始で、キーワードを含むウィンドウがないときは、タイマーを開始する
-                if (isRunning == false && isTargetWindowExist == false)
+                if (isRunning == false && isTriggered == false)
                 {
                     timer = new System.Threading.Timer(callback, null, 0, period);
                     isRunning = true;
                 }
 
                 // タイマー動作中で、キーワードを含むウィンドウが出現したら、タイマーを停止して処理を行う
-                if (isRunning == true && isTargetWindowExist == true)
+                if (isRunning == true && isTriggered == true)
                 {
-                    // 実行中のスレッドがすべて終了するのを待つために、確実なDisposeを行う
+                    // このときは実行中のスレッドがすべて終了するのを待つために、確実なDisposeを行う
                     // https://so-zou.jp/software/tech/programming/c-sharp/thread/
                     // timer.Dispose();の代わりに以下のようにする
                     using (System.Threading.WaitHandle waitHandle = new System.Threading.ManualResetEvent(false))
@@ -443,12 +449,6 @@ namespace dorareko
                     }
                 }
 
-                // ログオフ・シャットダウンなどのとき
-                var evw = new EventWatcher((o, e) =>
-                {
-                    timer.Dispose();
-                    Environment.Exit(-1);
-                });
             }
         }
 
